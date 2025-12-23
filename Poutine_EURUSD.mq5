@@ -63,14 +63,14 @@ input double   InpTrailingATRMult   = 1.5;              // Trailing Stop ATR Mul
 
 input group "══════════ SESSION TIMES (GMT) ══════════"
 input int      InpAsianStartHour    = 0;                // Asian Range Start (GMT)
-input int      InpAsianEndHour      = 6;                // Asian Range End (GMT) - Earlier for EURUSD
-input int      InpLondonStartHour   = 7;                // London Entry Start (GMT)
-input int      InpLondonEndHour     = 11;               // London Entry End (GMT) - Extended window
-input int      InpNYStartHour       = 13;               // NY Session Start (GMT)
-input int      InpNYEndHour         = 16;               // NY Session End (GMT)
+input int      InpAsianEndHour      = 7;                // Asian Range End (GMT) - Full Asian session
+input int      InpLondonStartHour   = 8;                // London Entry Start (GMT) - London open
+input int      InpLondonEndHour     = 11;               // London Entry End (GMT)
+input int      InpOverlapStartHour  = 13;               // London-NY Overlap Start (BEST TIME!)
+input int      InpOverlapEndHour    = 17;               // London-NY Overlap End (GMT)
 input int      InpForceCloseHour    = 21;               // Force Close Hour (GMT)
 input int      InpBrokerGMTOffset   = 2;                // Broker GMT Offset (for backtest)
-input bool     InpTradeNYSession    = true;             // Also Trade NY Session
+input bool     InpTradeOverlap      = true;             // Trade London-NY Overlap (Recommended)
 
 input group "══════════ BREAKOUT FILTERS ══════════"
 input ENUM_TIMEFRAMES InpConfirmTF  = PERIOD_M15;       // Confirmation Timeframe
@@ -79,12 +79,21 @@ input int      InpMaxRangePips      = 100;              // Max Asian Range (pips
 input int      InpBreakoutBuffer    = 2;                // Breakout Buffer (pips)
 input int      InpMaxSpreadPips     = 5;                // Max Spread (pips) - Increased for backtest
 
-input group "══════════ SMART MONEY FILTERS ══════════"
-input bool     InpUseLiquiditySweep = true;             // Detect Liquidity Sweeps (ICT)
-input int      InpSweepBufferPips   = 5;                // Sweep Detection Buffer (pips)
-input bool     InpUseATRFilter      = true;             // Use ATR Volatility Filter
+input group "══════════ INDICATOR FILTERS ══════════"
+input bool     InpUseRSIFilter      = true;             // Use RSI Confirmation
+input int      InpRSIPeriod         = 14;               // RSI Period
+input int      InpRSILongLevel      = 50;               // RSI Level for Long (>)
+input int      InpRSIShortLevel     = 50;               // RSI Level for Short (<)
+input bool     InpUseEMAFilter      = true;             // Use EMA Trend Filter
+input int      InpEMAFastPeriod     = 5;                // Fast EMA Period
+input int      InpEMASlowPeriod     = 12;               // Slow EMA Period
+input bool     InpUseATRFilter      = false;            // Use ATR Volatility Filter (OFF by default)
 input int      InpATRPeriod         = 14;               // ATR Period
-input double   InpMinATRPips        = 5.0;              // Min ATR (pips)
+input double   InpMinATRPips        = 3.0;              // Min ATR (pips)
+
+input group "══════════ SMART MONEY FILTERS ══════════"
+input bool     InpUseLiquiditySweep = false;            // Detect Liquidity Sweeps (OFF for simplicity)
+input int      InpSweepBufferPips   = 5;                // Sweep Detection Buffer (pips)
 input bool     InpUseHigherTFFilter = true;             // Use Higher TF Trend Filter
 input ENUM_TIMEFRAMES InpHigherTF   = PERIOD_H4;        // Higher Timeframe for Bias
 
@@ -132,11 +141,14 @@ bool           g_LiquiditySweepDetected = false;
 int            g_SweepDirection = 0;
 int            g_MarketBias = 0;  // 1 = bullish, -1 = bearish, 0 = neutral
 
-// ATR handle
+// Indicator handles
 int            g_ATRHandle = INVALID_HANDLE;
 int            g_ATRHandleHTF = INVALID_HANDLE;
+int            g_RSIHandle = INVALID_HANDLE;
+int            g_EMAFastHandle = INVALID_HANDLE;
+int            g_EMASlowHandle = INVALID_HANDLE;
 
-// EMA handles for trend detection
+// EMA handles for higher TF trend detection
 int            g_EMA50Handle = INVALID_HANDLE;
 int            g_EMA200Handle = INVALID_HANDLE;
 
@@ -178,7 +190,31 @@ int OnInit()
         return(INIT_FAILED);
     }
 
-    // Initialize EMA handles for trend detection
+    // Initialize RSI handle
+    if(InpUseRSIFilter)
+    {
+        g_RSIHandle = iRSI(Symbol(), InpConfirmTF, InpRSIPeriod, PRICE_CLOSE);
+        if(g_RSIHandle == INVALID_HANDLE)
+        {
+            Print("Failed to create RSI indicator");
+            return(INIT_FAILED);
+        }
+    }
+
+    // Initialize EMA handles for entry filter
+    if(InpUseEMAFilter)
+    {
+        g_EMAFastHandle = iMA(Symbol(), InpConfirmTF, InpEMAFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
+        g_EMASlowHandle = iMA(Symbol(), InpConfirmTF, InpEMASlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
+
+        if(g_EMAFastHandle == INVALID_HANDLE || g_EMASlowHandle == INVALID_HANDLE)
+        {
+            Print("Failed to create EMA entry indicators");
+            return(INIT_FAILED);
+        }
+    }
+
+    // Initialize EMA handles for higher TF trend detection
     if(InpUseHigherTFFilter)
     {
         g_EMA50Handle = iMA(Symbol(), InpHigherTF, 50, 0, MODE_EMA, PRICE_CLOSE);
@@ -214,6 +250,9 @@ void OnDeinit(const int reason)
     if(g_ATRHandleHTF != INVALID_HANDLE) IndicatorRelease(g_ATRHandleHTF);
     if(g_EMA50Handle != INVALID_HANDLE) IndicatorRelease(g_EMA50Handle);
     if(g_EMA200Handle != INVALID_HANDLE) IndicatorRelease(g_EMA200Handle);
+    if(g_RSIHandle != INVALID_HANDLE) IndicatorRelease(g_RSIHandle);
+    if(g_EMAFastHandle != INVALID_HANDLE) IndicatorRelease(g_EMAFastHandle);
+    if(g_EMASlowHandle != INVALID_HANDLE) IndicatorRelease(g_EMASlowHandle);
 
     // Clean up chart objects
     ObjectsDeleteAll(0, "Poutine_");
@@ -294,13 +333,13 @@ void OnTick()
         }
     }
 
-    // Phase 3: NY Session Entry (13:00 - 16:00 GMT) - Optional
-    if(InpTradeNYSession && gmtHour >= InpNYStartHour && gmtHour < InpNYEndHour)
+    // Phase 3: London-NY Overlap Entry (13:00 - 17:00 GMT) - BEST TIME FOR EURUSD!
+    if(InpTradeOverlap && gmtHour >= InpOverlapStartHour && gmtHour < InpOverlapEndHour)
     {
         if(g_RangeCalculated && g_TradesToday < 2 && !HasOpenPosition())
         {
-            if(InpShowPanel) UpdatePanel("NY SESSION - SCANNING...");
-            CheckForBreakout("NY");
+            if(InpShowPanel) UpdatePanel("OVERLAP SESSION - SCANNING...");
+            CheckForBreakout("OVERLAP");
         }
     }
 
@@ -629,6 +668,54 @@ void CheckForBreakout(string session)
         else if(g_SweepDirection == -1 && buySignal)
         {
             buySignal = false;
+        }
+    }
+
+    // RSI Filter - Confirm momentum direction
+    if(InpUseRSIFilter && g_RSIHandle != INVALID_HANDLE)
+    {
+        double rsi[];
+        ArraySetAsSeries(rsi, true);
+
+        if(CopyBuffer(g_RSIHandle, 0, 0, 2, rsi) > 0)
+        {
+            // For BUY: RSI must be > 50 (bullish momentum)
+            if(buySignal && rsi[0] <= InpRSILongLevel)
+            {
+                Print("BUY filtered: RSI ", DoubleToString(rsi[0], 1), " <= ", InpRSILongLevel);
+                buySignal = false;
+            }
+            // For SELL: RSI must be < 50 (bearish momentum)
+            if(sellSignal && rsi[0] >= InpRSIShortLevel)
+            {
+                Print("SELL filtered: RSI ", DoubleToString(rsi[0], 1), " >= ", InpRSIShortLevel);
+                sellSignal = false;
+            }
+        }
+    }
+
+    // EMA 5/12 Crossover Filter - Confirm trend alignment
+    if(InpUseEMAFilter && g_EMAFastHandle != INVALID_HANDLE && g_EMASlowHandle != INVALID_HANDLE)
+    {
+        double emaFast[], emaSlow[];
+        ArraySetAsSeries(emaFast, true);
+        ArraySetAsSeries(emaSlow, true);
+
+        if(CopyBuffer(g_EMAFastHandle, 0, 0, 2, emaFast) > 0 &&
+           CopyBuffer(g_EMASlowHandle, 0, 0, 2, emaSlow) > 0)
+        {
+            // For BUY: Fast EMA must be above Slow EMA (bullish trend)
+            if(buySignal && emaFast[0] <= emaSlow[0])
+            {
+                Print("BUY filtered: EMA", InpEMAFastPeriod, " <= EMA", InpEMASlowPeriod);
+                buySignal = false;
+            }
+            // For SELL: Fast EMA must be below Slow EMA (bearish trend)
+            if(sellSignal && emaFast[0] >= emaSlow[0])
+            {
+                Print("SELL filtered: EMA", InpEMAFastPeriod, " >= EMA", InpEMASlowPeriod);
+                sellSignal = false;
+            }
         }
     }
 
@@ -1089,7 +1176,7 @@ void PrintInitInfo()
     Print("SESSIONS (GMT):");
     Print("  Asian: ", InpAsianStartHour, ":00 - ", InpAsianEndHour, ":00");
     Print("  London: ", InpLondonStartHour, ":00 - ", InpLondonEndHour, ":00");
-    Print("  NY: ", InpNYStartHour, ":00 - ", InpNYEndHour, ":00");
+    Print("  Overlap: ", InpOverlapStartHour, ":00 - ", InpOverlapEndHour, ":00");
     Print("═══════════════════════════════════════════════════");
     Print("FILTERS:");
     Print("  Range: ", InpMinRangePips, " - ", InpMaxRangePips, " pips");
