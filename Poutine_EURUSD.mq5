@@ -33,7 +33,7 @@ input group "══════════ RISK MANAGEMENT ══════�
 input double   InpRiskPercent       = 1.0;              // Risk % Per Trade
 input double   InpRiskReward        = 3.0;              // Risk:Reward Ratio (3R)
 input double   InpMaxDailyLossPct   = 4.0;              // Max Daily Loss % (FTMO: 5%)
-input double   InpMaxTotalDDPct     = 8.0;              // Max Total Drawdown % (FTMO: 10%)
+input double   InpMaxTotalDDPct     = 100.0;            // Max Total Drawdown % (disabled for backtest)
 input bool     InpUseFTMOProtection = false;            // Enable FTMO Protection (OFF for backtest)
 
 input group "══════════ TRADE SETTINGS ══════════"
