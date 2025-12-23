@@ -1,15 +1,15 @@
 //+------------------------------------------------------------------+
-//|                                                      Poutine.mq5 |
+//|                                               Poutine_EURUSD.mq5 |
 //|                    INSTITUTIONAL GRADE LONDON BREAKOUT EA        |
 //|                   https://github.com/tradingluca31-boop/Poutine  |
 //+------------------------------------------------------------------+
-#property copyright "Poutine EA - Institutional Grade"
+#property copyright "Poutine EA v3.0 - EURUSD Institutional"
 #property link      "https://github.com/tradingluca31-boop/Poutine"
-#property version   "2.00"
-#property description "=== POUTINE EA v2.0 ==="
-#property description "Institutional Grade London Breakout for XAUUSD"
-#property description "Based on Asian Range Box + Smart Money Concepts"
-#property description "FTMO/Prop Firm Compliant | No Martingale | No Grid"
+#property version   "3.00"
+#property description "=== POUTINE EA v3.0 - EURUSD ==="
+#property description "Institutional Grade London Breakout for EURUSD"
+#property description "Based on ICT Smart Money Concepts + Volatility Breakout"
+#property description "Inspired by FXStabilizer, GPS Robot, Forex Trend Detector"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -21,15 +21,25 @@
 //+------------------------------------------------------------------+
 enum ENUM_SL_TYPE
 {
-    SL_AGGRESSIVE,    // Aggressive (Middle of Box)
-    SL_CONSERVATIVE,  // Conservative (Opposite Side)
-    SL_ATR_BASED      // ATR-Based Dynamic
+    SL_ASIAN_MID,         // Middle of Asian Range
+    SL_ASIAN_OPPOSITE,    // Opposite Side of Range
+    SL_ATR_BASED,         // ATR-Based Dynamic
+    SL_FIXED_PIPS         // Fixed Pips
 };
 
 enum ENUM_ENTRY_TYPE
 {
-    ENTRY_SAFE,       // Safe (Wait for candle close)
-    ENTRY_AGGRESSIVE  // Aggressive (Immediate breakout)
+    ENTRY_CANDLE_CLOSE,   // Wait for Candle Close (Safe)
+    ENTRY_IMMEDIATE,      // Immediate on Breakout (Aggressive)
+    ENTRY_RETEST          // Wait for Retest (Conservative)
+};
+
+enum ENUM_MARKET_BIAS
+{
+    BIAS_AUTO,            // Auto-detect with Higher TF
+    BIAS_LONG_ONLY,       // Long Only
+    BIAS_SHORT_ONLY,      // Short Only
+    BIAS_BOTH             // Both Directions
 };
 
 //+------------------------------------------------------------------+
@@ -37,45 +47,59 @@ enum ENUM_ENTRY_TYPE
 //+------------------------------------------------------------------+
 input group "══════════ RISK MANAGEMENT ══════════"
 input double   InpRiskPercent       = 1.0;              // Risk % Per Trade
-input double   InpRiskReward        = 3.0;              // Risk:Reward Ratio
+input double   InpRiskReward        = 2.0;              // Risk:Reward Ratio (2R optimal for EURUSD)
 input double   InpMaxDailyLossPct   = 4.0;              // Max Daily Loss % (FTMO: 5%)
 input double   InpMaxTotalDDPct     = 8.0;              // Max Total Drawdown % (FTMO: 10%)
 input bool     InpUseFTMOProtection = true;             // Enable FTMO Protection
 
 input group "══════════ TRADE SETTINGS ══════════"
-input int      InpMagicNumber       = 202401;           // Magic Number
-input ENUM_SL_TYPE InpSLType        = SL_AGGRESSIVE;    // Stop Loss Type
-input ENUM_ENTRY_TYPE InpEntryType  = ENTRY_SAFE;       // Entry Type
+input int      InpMagicNumber       = 202402;           // Magic Number
+input ENUM_SL_TYPE InpSLType        = SL_ATR_BASED;     // Stop Loss Type
+input ENUM_ENTRY_TYPE InpEntryType  = ENTRY_CANDLE_CLOSE; // Entry Type
+input ENUM_MARKET_BIAS InpMarketBias = BIAS_AUTO;       // Market Bias Filter
+input double   InpFixedSLPips       = 15.0;             // Fixed SL in Pips (if SL_FIXED_PIPS)
 input bool     InpUseTrailingStop   = true;             // Use Trailing Stop
 input double   InpTrailingATRMult   = 1.5;              // Trailing Stop ATR Multiplier
 
 input group "══════════ SESSION TIMES (GMT) ══════════"
 input int      InpAsianStartHour    = 0;                // Asian Range Start (GMT)
-input int      InpAsianEndHour      = 7;                // Asian Range End (GMT)
+input int      InpAsianEndHour      = 6;                // Asian Range End (GMT) - Earlier for EURUSD
 input int      InpLondonStartHour   = 7;                // London Entry Start (GMT)
-input int      InpLondonEndHour     = 10;               // London Entry End (GMT)
-input int      InpForceCloseHour    = 22;               // Force Close Before (GMT)
+input int      InpLondonEndHour     = 11;               // London Entry End (GMT) - Extended window
+input int      InpNYStartHour       = 13;               // NY Session Start (GMT)
+input int      InpNYEndHour         = 16;               // NY Session End (GMT)
+input int      InpForceCloseHour    = 21;               // Force Close Hour (GMT)
+input int      InpBrokerGMTOffset   = 2;                // Broker GMT Offset (for backtest)
+input bool     InpTradeNYSession    = true;             // Also Trade NY Session
 
 input group "══════════ BREAKOUT FILTERS ══════════"
 input ENUM_TIMEFRAMES InpConfirmTF  = PERIOD_M15;       // Confirmation Timeframe
-input int      InpMinRangePts       = 300;              // Min Asian Range (points)
-input int      InpMaxRangePts       = 2500;             // Max Asian Range (points)
-input int      InpBreakoutBuffer    = 50;               // Breakout Buffer (points)
-input int      InpMaxSpread         = 40;               // Max Spread (points)
+input int      InpMinRangePips      = 5;                // Min Asian Range (pips) - Reduced for more trades
+input int      InpMaxRangePips      = 100;              // Max Asian Range (pips) - Increased
+input int      InpBreakoutBuffer    = 2;                // Breakout Buffer (pips)
+input int      InpMaxSpreadPips     = 5;                // Max Spread (pips) - Increased for backtest
 
 input group "══════════ SMART MONEY FILTERS ══════════"
-input bool     InpUseLiquiditySweep = true;             // Detect Liquidity Sweeps
-input int      InpSweepBuffer       = 100;              // Sweep Detection Buffer (pts)
+input bool     InpUseLiquiditySweep = true;             // Detect Liquidity Sweeps (ICT)
+input int      InpSweepBufferPips   = 5;                // Sweep Detection Buffer (pips)
 input bool     InpUseATRFilter      = true;             // Use ATR Volatility Filter
 input int      InpATRPeriod         = 14;               // ATR Period
-input double   InpMinATRMult        = 0.3;              // Min ATR Multiplier
+input double   InpMinATRPips        = 5.0;              // Min ATR (pips)
+input bool     InpUseHigherTFFilter = true;             // Use Higher TF Trend Filter
+input ENUM_TIMEFRAMES InpHigherTF   = PERIOD_H4;        // Higher Timeframe for Bias
+
+input group "══════════ INSTITUTIONAL FILTERS ══════════"
+input bool     InpAvoidMonday       = false;            // Avoid Monday (low liquidity)
+input bool     InpAvoidFriday       = false;            // Avoid Friday afternoon
+input int      InpFridayCloseHour   = 18;               // Friday Close Hour (GMT)
+input bool     InpAvoidRollover     = false;            // Avoid Rollover Time (21:00-01:00)
 
 input group "══════════ DISPLAY ══════════"
 input bool     InpShowPanel         = true;             // Show Info Panel
 input bool     InpDrawBoxes         = true;             // Draw Asian Range Box
-input color    InpBoxColorBull      = clrLime;          // Bullish Breakout Color
-input color    InpBoxColorBear      = clrRed;           // Bearish Breakout Color
-input color    InpBoxColorNeutral   = clrGray;          // Neutral Box Color
+input color    InpBoxColorBull      = clrDodgerBlue;    // Bullish Breakout Color
+input color    InpBoxColorBear      = clrOrangeRed;     // Bearish Breakout Color
+input color    InpBoxColorNeutral   = clrDimGray;       // Neutral Box Color
 
 //+------------------------------------------------------------------+
 //| GLOBAL VARIABLES                                                  |
@@ -84,15 +108,20 @@ CTrade         trade;
 CPositionInfo  posInfo;
 CAccountInfo   accInfo;
 
+// Pip value for EURUSD
+double         g_PipValue;
+int            g_PipDigits;
+
 // Session data
 double         g_AsianHigh = 0;
 double         g_AsianLow = 0;
 double         g_AsianMid = 0;
-double         g_AsianRange = 0;
+double         g_AsianRangePips = 0;
 bool           g_RangeCalculated = false;
 
 // Trade management
 bool           g_TradeTakenToday = false;
+int            g_TradesToday = 0;
 datetime       g_LastTradeDate = 0;
 int            g_BrokerGMTOffset = 0;
 double         g_DailyStartBalance = 0;
@@ -100,10 +129,16 @@ double         g_InitialBalance = 0;
 
 // Smart Money tracking
 bool           g_LiquiditySweepDetected = false;
-int            g_SweepDirection = 0;  // 1 = swept lows (bullish), -1 = swept highs (bearish)
+int            g_SweepDirection = 0;
+int            g_MarketBias = 0;  // 1 = bullish, -1 = bearish, 0 = neutral
 
 // ATR handle
 int            g_ATRHandle = INVALID_HANDLE;
+int            g_ATRHandleHTF = INVALID_HANDLE;
+
+// EMA handles for trend detection
+int            g_EMA50Handle = INVALID_HANDLE;
+int            g_EMA200Handle = INVALID_HANDLE;
 
 // Statistics
 int            g_TotalTrades = 0;
@@ -116,25 +151,44 @@ double         g_TotalProfit = 0;
 //+------------------------------------------------------------------+
 int OnInit()
 {
+    // Calculate pip value
+    g_PipDigits = (_Digits == 5 || _Digits == 3) ? 1 : 0;
+    g_PipValue = _Point * MathPow(10, g_PipDigits);
+
     // Validate symbol
     string symbol = Symbol();
-    if(StringFind(symbol, "XAU") < 0 && StringFind(symbol, "GOLD") < 0)
+    if(StringFind(symbol, "EUR") < 0 && StringFind(symbol, "USD") < 0)
     {
-        Print("⚠️ WARNING: Poutine EA is optimized for XAUUSD/GOLD only!");
+        Print("WARNING: Poutine EURUSD EA is optimized for EUR/USD pairs!");
         Print("Current symbol: ", symbol);
     }
 
     // Initialize trade object
     trade.SetExpertMagicNumber(InpMagicNumber);
-    trade.SetDeviationInPoints(50);
+    trade.SetDeviationInPoints(10);
     trade.SetTypeFilling(ORDER_FILLING_IOC);
 
-    // Initialize ATR handle
+    // Initialize ATR handles
     g_ATRHandle = iATR(Symbol(), InpConfirmTF, InpATRPeriod);
-    if(g_ATRHandle == INVALID_HANDLE)
+    g_ATRHandleHTF = iATR(Symbol(), InpHigherTF, InpATRPeriod);
+
+    if(g_ATRHandle == INVALID_HANDLE || g_ATRHandleHTF == INVALID_HANDLE)
     {
-        Print("❌ Failed to create ATR indicator");
+        Print("Failed to create ATR indicators");
         return(INIT_FAILED);
+    }
+
+    // Initialize EMA handles for trend detection
+    if(InpUseHigherTFFilter)
+    {
+        g_EMA50Handle = iMA(Symbol(), InpHigherTF, 50, 0, MODE_EMA, PRICE_CLOSE);
+        g_EMA200Handle = iMA(Symbol(), InpHigherTF, 200, 0, MODE_EMA, PRICE_CLOSE);
+
+        if(g_EMA50Handle == INVALID_HANDLE || g_EMA200Handle == INVALID_HANDLE)
+        {
+            Print("Failed to create EMA indicators");
+            return(INIT_FAILED);
+        }
     }
 
     // Calculate broker GMT offset
@@ -155,16 +209,18 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-    // Release ATR handle
-    if(g_ATRHandle != INVALID_HANDLE)
-        IndicatorRelease(g_ATRHandle);
+    // Release indicator handles
+    if(g_ATRHandle != INVALID_HANDLE) IndicatorRelease(g_ATRHandle);
+    if(g_ATRHandleHTF != INVALID_HANDLE) IndicatorRelease(g_ATRHandleHTF);
+    if(g_EMA50Handle != INVALID_HANDLE) IndicatorRelease(g_EMA50Handle);
+    if(g_EMA200Handle != INVALID_HANDLE) IndicatorRelease(g_EMA200Handle);
 
     // Clean up chart objects
     ObjectsDeleteAll(0, "Poutine_");
     Comment("");
 
     Print("═══════════════════════════════════════");
-    Print("POUTINE EA STOPPED");
+    Print("POUTINE EURUSD EA STOPPED");
     Print("Total Trades: ", g_TotalTrades);
     Print("Win Rate: ", g_TotalTrades > 0 ? DoubleToString((double)g_WinTrades / g_TotalTrades * 100, 1) : "0", "%");
     Print("Total P/L: $", DoubleToString(g_TotalProfit, 2));
@@ -180,56 +236,86 @@ void OnTick()
     int gmtHour, gmtMinute;
     GetGMTTime(gmtHour, gmtMinute);
 
+    // Get day of week
+    MqlDateTime dt;
+    TimeToStruct(TimeCurrent(), dt);
+    int dayOfWeek = dt.day_of_week;
+
     // Check for new day and reset
     CheckNewDay();
+
+    // Institutional filters
+    if(!PassInstitutionalFilters(gmtHour, dayOfWeek))
+    {
+        if(InpShowPanel) UpdatePanel("INSTITUTIONAL FILTER ACTIVE");
+        return;
+    }
 
     // FTMO Protection Check
     if(InpUseFTMOProtection && !CheckFTMOLimits())
     {
-        if(InpShowPanel) UpdatePanel("⛔ FTMO LIMIT REACHED - TRADING DISABLED");
+        if(InpShowPanel) UpdatePanel("FTMO LIMIT REACHED");
         return;
     }
 
-    // Phase 1: Calculate Asian Range (00:00 - 07:00 GMT)
+    // Update market bias from higher timeframe
+    if(InpUseHigherTFFilter || InpMarketBias == BIAS_AUTO)
+    {
+        UpdateMarketBias();
+    }
+
+    // Phase 1: Calculate Asian Range (00:00 - 06:00 GMT for EURUSD)
     if(gmtHour >= InpAsianStartHour && gmtHour < InpAsianEndHour)
     {
         CalculateAsianRange();
-        if(InpShowPanel) UpdatePanel("📊 CALCULATING ASIAN RANGE...");
+        if(InpShowPanel) UpdatePanel("CALCULATING ASIAN RANGE...");
     }
 
-    // Phase 2: London Breakout Entry (07:00 - 10:00 GMT)
+    // Phase 2: London Breakout Entry (07:00 - 11:00 GMT)
     if(gmtHour >= InpLondonStartHour && gmtHour < InpLondonEndHour)
     {
+        // Finalize Asian range at London open
+        if(!g_RangeCalculated && g_AsianHigh > 0 && g_AsianLow > 0)
+        {
+            FinalizeAsianRange();
+        }
+
         if(g_RangeCalculated && !g_TradeTakenToday && !HasOpenPosition())
         {
-            if(InpShowPanel) UpdatePanel("🎯 LONDON OPEN - SCANNING FOR BREAKOUT...");
+            if(InpShowPanel) UpdatePanel("LONDON SESSION - SCANNING...");
 
-            // Smart Money: Check for liquidity sweep first
+            // Smart Money: Check for liquidity sweep
             if(InpUseLiquiditySweep)
             {
                 DetectLiquiditySweep();
             }
 
-            CheckForBreakout();
-        }
-        else if(g_TradeTakenToday)
-        {
-            if(InpShowPanel) UpdatePanel("✅ TRADE TAKEN - MANAGING POSITION");
+            CheckForBreakout("LONDON");
         }
     }
 
-    // Phase 3: Trade Management
+    // Phase 3: NY Session Entry (13:00 - 16:00 GMT) - Optional
+    if(InpTradeNYSession && gmtHour >= InpNYStartHour && gmtHour < InpNYEndHour)
+    {
+        if(g_RangeCalculated && g_TradesToday < 2 && !HasOpenPosition())
+        {
+            if(InpShowPanel) UpdatePanel("NY SESSION - SCANNING...");
+            CheckForBreakout("NY");
+        }
+    }
+
+    // Phase 4: Trade Management
     if(HasOpenPosition())
     {
         ManagePosition();
-        if(InpShowPanel) UpdatePanel("📈 POSITION ACTIVE - MANAGING...");
+        if(InpShowPanel) UpdatePanel("POSITION ACTIVE - MANAGING...");
     }
 
-    // Phase 4: Force Close Before Asian (22:00 GMT)
+    // Phase 5: Force Close (21:00 GMT)
     if(gmtHour >= InpForceCloseHour)
     {
         ForceCloseAllPositions("End of Day");
-        if(InpShowPanel) UpdatePanel("🌙 SESSION ENDED - WAITING FOR NEW DAY");
+        if(InpShowPanel) UpdatePanel("SESSION ENDED");
     }
 
     // Update chart display
@@ -249,7 +335,6 @@ void OnTrade()
 
     if(currentHistoryTotal > lastHistoryTotal)
     {
-        // Check last closed deal
         HistorySelect(0, TimeCurrent());
         int total = HistoryDealsTotal();
 
@@ -271,16 +356,88 @@ void OnTrade()
                         else if(profit < 0)
                             g_LossTrades++;
 
-                        Print("═══ TRADE CLOSED ═══");
+                        Print("=== TRADE CLOSED ===");
                         Print("Profit: $", DoubleToString(profit, 2));
-                        Print("Total Trades: ", g_TotalTrades, " | Win Rate: ",
-                              DoubleToString((double)g_WinTrades / g_TotalTrades * 100, 1), "%");
+                        Print("Win Rate: ", DoubleToString((double)g_WinTrades / g_TotalTrades * 100, 1), "%");
                     }
                 }
             }
         }
     }
     lastHistoryTotal = currentHistoryTotal;
+}
+
+//+------------------------------------------------------------------+
+//| Pass Institutional Filters                                        |
+//+------------------------------------------------------------------+
+bool PassInstitutionalFilters(int gmtHour, int dayOfWeek)
+{
+    // Avoid Monday
+    if(InpAvoidMonday && dayOfWeek == 1 && gmtHour < 8)
+        return false;
+
+    // Avoid Friday afternoon
+    if(InpAvoidFriday && dayOfWeek == 5 && gmtHour >= InpFridayCloseHour)
+        return false;
+
+    // Avoid rollover time
+    if(InpAvoidRollover && (gmtHour >= 21 || gmtHour < 1))
+        return false;
+
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Update Market Bias from Higher Timeframe                          |
+//+------------------------------------------------------------------+
+void UpdateMarketBias()
+{
+    if(InpMarketBias == BIAS_LONG_ONLY)
+    {
+        g_MarketBias = 1;
+        return;
+    }
+    if(InpMarketBias == BIAS_SHORT_ONLY)
+    {
+        g_MarketBias = -1;
+        return;
+    }
+    if(InpMarketBias == BIAS_BOTH)
+    {
+        g_MarketBias = 0;
+        return;
+    }
+
+    // Auto-detect using EMA 50/200 on higher timeframe
+    if(g_EMA50Handle == INVALID_HANDLE || g_EMA200Handle == INVALID_HANDLE)
+    {
+        g_MarketBias = 0;
+        return;
+    }
+
+    double ema50[], ema200[];
+    ArraySetAsSeries(ema50, true);
+    ArraySetAsSeries(ema200, true);
+
+    if(CopyBuffer(g_EMA50Handle, 0, 0, 2, ema50) <= 0) return;
+    if(CopyBuffer(g_EMA200Handle, 0, 0, 2, ema200) <= 0) return;
+
+    double currentPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+
+    // Bullish: Price > EMA50 > EMA200
+    if(currentPrice > ema50[0] && ema50[0] > ema200[0])
+    {
+        g_MarketBias = 1;
+    }
+    // Bearish: Price < EMA50 < EMA200
+    else if(currentPrice < ema50[0] && ema50[0] < ema200[0])
+    {
+        g_MarketBias = -1;
+    }
+    else
+    {
+        g_MarketBias = 0;  // Neutral/ranging
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -291,14 +448,9 @@ void CalculateAsianRange()
     if(g_RangeCalculated) return;
 
     datetime currentTime = TimeCurrent();
-    MqlDateTime dt;
-    TimeToStruct(currentTime, dt);
-
-    // Calculate Asian session start time
     datetime todayStart = StringToTime(TimeToString(currentTime, TIME_DATE));
     datetime asianStart = todayStart + (InpAsianStartHour + g_BrokerGMTOffset) * 3600;
 
-    // Handle day boundary
     if(InpAsianStartHour + g_BrokerGMTOffset >= 24)
         asianStart -= 86400;
     if(InpAsianStartHour + g_BrokerGMTOffset < 0)
@@ -308,7 +460,6 @@ void CalculateAsianRange()
     double low = DBL_MAX;
     int barsFound = 0;
 
-    // Get bars in Asian session
     int totalBars = Bars(Symbol(), InpConfirmTF);
 
     for(int i = 0; i < MathMin(totalBars, 500); i++)
@@ -331,25 +482,25 @@ void CalculateAsianRange()
         g_AsianHigh = high;
         g_AsianLow = low;
         g_AsianMid = (high + low) / 2;
-        g_AsianRange = (high - low) / _Point;
+        g_AsianRangePips = (high - low) / g_PipValue;
 
-        Print("═══ ASIAN RANGE CALCULATED ═══");
+        Print("=== ASIAN RANGE ===");
         Print("High: ", DoubleToString(g_AsianHigh, _Digits));
         Print("Low: ", DoubleToString(g_AsianLow, _Digits));
-        Print("Range: ", DoubleToString(g_AsianRange, 0), " points");
+        Print("Range: ", DoubleToString(g_AsianRangePips, 1), " pips");
     }
 }
 
 //+------------------------------------------------------------------+
-//| Mark range as finalized at London open                            |
+//| Finalize Asian Range                                              |
 //+------------------------------------------------------------------+
 void FinalizeAsianRange()
 {
     if(g_AsianHigh > 0 && g_AsianLow > 0 && !g_RangeCalculated)
     {
-        g_AsianRange = (g_AsianHigh - g_AsianLow) / _Point;
+        g_AsianRangePips = (g_AsianHigh - g_AsianLow) / g_PipValue;
         g_RangeCalculated = true;
-        Print("✅ Asian Range Finalized: ", DoubleToString(g_AsianRange, 0), " points");
+        Print("Asian Range Finalized: ", DoubleToString(g_AsianRangePips, 1), " pips");
     }
 }
 
@@ -359,86 +510,58 @@ void FinalizeAsianRange()
 void DetectLiquiditySweep()
 {
     double currentPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-    double sweepBuffer = InpSweepBuffer * _Point;
+    double sweepBuffer = InpSweepBufferPips * g_PipValue;
 
-    // Check if price swept below Asian Low then reversed (bullish sweep)
-    if(currentPrice < g_AsianLow - sweepBuffer)
+    // Bullish sweep: Price swept below Asian Low then reversed
+    double recentLow = iLow(Symbol(), InpConfirmTF, 1);
+    if(recentLow < g_AsianLow - sweepBuffer && currentPrice > g_AsianLow)
     {
-        // Price is below Asian low - potential sweep in progress
-        g_LiquiditySweepDetected = false;
-    }
-    else if(currentPrice > g_AsianLow && currentPrice < g_AsianMid)
-    {
-        // Price returned inside range after being below - bullish sweep confirmed
-        double recentLow = iLow(Symbol(), InpConfirmTF, 1);
-        if(recentLow < g_AsianLow)
-        {
-            g_LiquiditySweepDetected = true;
-            g_SweepDirection = 1;  // Bullish
-            Print("🎯 LIQUIDITY SWEEP DETECTED: Bullish (swept lows)");
-        }
+        g_LiquiditySweepDetected = true;
+        g_SweepDirection = 1;  // Bullish
+        Print("LIQUIDITY SWEEP: Bullish (swept lows)");
     }
 
-    // Check if price swept above Asian High then reversed (bearish sweep)
-    if(currentPrice > g_AsianHigh + sweepBuffer)
+    // Bearish sweep: Price swept above Asian High then reversed
+    double recentHigh = iHigh(Symbol(), InpConfirmTF, 1);
+    if(recentHigh > g_AsianHigh + sweepBuffer && currentPrice < g_AsianHigh)
     {
-        g_LiquiditySweepDetected = false;
-    }
-    else if(currentPrice < g_AsianHigh && currentPrice > g_AsianMid)
-    {
-        double recentHigh = iHigh(Symbol(), InpConfirmTF, 1);
-        if(recentHigh > g_AsianHigh)
-        {
-            g_LiquiditySweepDetected = true;
-            g_SweepDirection = -1;  // Bearish
-            Print("🎯 LIQUIDITY SWEEP DETECTED: Bearish (swept highs)");
-        }
+        g_LiquiditySweepDetected = true;
+        g_SweepDirection = -1;  // Bearish
+        Print("LIQUIDITY SWEEP: Bearish (swept highs)");
     }
 }
 
 //+------------------------------------------------------------------+
 //| Check for Breakout Entry                                          |
 //+------------------------------------------------------------------+
-void CheckForBreakout()
+void CheckForBreakout(string session)
 {
-    // Finalize range if not done
-    if(!g_RangeCalculated)
-    {
-        FinalizeAsianRange();
-    }
-
     if(!g_RangeCalculated) return;
 
     // Validate range size
-    if(g_AsianRange < InpMinRangePts)
+    if(g_AsianRangePips < InpMinRangePips)
     {
-        Print("⚠️ Range too small: ", g_AsianRange, " < ", InpMinRangePts);
         return;
     }
 
-    if(g_AsianRange > InpMaxRangePts)
+    if(g_AsianRangePips > InpMaxRangePips)
     {
-        Print("⚠️ Range too large: ", g_AsianRange, " > ", InpMaxRangePts);
         return;
     }
 
     // Check spread
-    double spread = SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
-    if(spread > InpMaxSpread)
+    double spreadPips = SymbolInfoInteger(Symbol(), SYMBOL_SPREAD) * _Point / g_PipValue;
+    if(spreadPips > InpMaxSpreadPips)
     {
-        Print("⚠️ Spread too high: ", spread);
         return;
     }
 
     // ATR Filter
     if(InpUseATRFilter)
     {
-        double atr = GetATR();
-        double minATR = (g_AsianHigh - g_AsianLow) * InpMinATRMult;
-
-        if(atr < minATR)
+        double atrPips = GetATR() / g_PipValue;
+        if(atrPips < InpMinATRPips)
         {
-            Print("⚠️ ATR filter failed: ", atr, " < ", minATR);
             return;
         }
     }
@@ -446,32 +569,31 @@ void CheckForBreakout()
     // Pre-trade margin check
     if(!CheckMarginForTrade())
     {
-        Print("❌ Insufficient margin for trade");
+        Print("Insufficient margin");
         return;
     }
 
-    double buffer = InpBreakoutBuffer * _Point;
+    double buffer = InpBreakoutBuffer * g_PipValue;
     bool buySignal = false;
     bool sellSignal = false;
 
-    if(InpEntryType == ENTRY_SAFE)
+    if(InpEntryType == ENTRY_CANDLE_CLOSE)
     {
-        // Safe entry: Wait for candle CLOSE outside range
         double close1 = iClose(Symbol(), InpConfirmTF, 1);
         double open1 = iOpen(Symbol(), InpConfirmTF, 1);
 
-        // Bullish breakout: Candle closes above Asian High
+        // Bullish breakout
         if(close1 > g_AsianHigh + buffer && close1 > open1)
         {
             buySignal = true;
         }
-        // Bearish breakout: Candle closes below Asian Low
+        // Bearish breakout
         else if(close1 < g_AsianLow - buffer && close1 < open1)
         {
             sellSignal = true;
         }
     }
-    else // ENTRY_AGGRESSIVE
+    else if(InpEntryType == ENTRY_IMMEDIATE)
     {
         double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
         double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
@@ -482,18 +604,30 @@ void CheckForBreakout()
             sellSignal = true;
     }
 
+    // Market bias filter
+    if(InpMarketBias == BIAS_AUTO && g_MarketBias != 0)
+    {
+        if(g_MarketBias == -1 && buySignal)
+        {
+            Print("BUY filtered by bearish market bias");
+            buySignal = false;
+        }
+        else if(g_MarketBias == 1 && sellSignal)
+        {
+            Print("SELL filtered by bullish market bias");
+            sellSignal = false;
+        }
+    }
+
     // Smart Money confirmation
     if(InpUseLiquiditySweep && g_LiquiditySweepDetected)
     {
-        // Only trade in direction of sweep
         if(g_SweepDirection == 1 && sellSignal)
         {
-            Print("⚠️ Ignoring SELL - Bullish liquidity sweep detected");
             sellSignal = false;
         }
         else if(g_SweepDirection == -1 && buySignal)
         {
-            Print("⚠️ Ignoring BUY - Bearish liquidity sweep detected");
             buySignal = false;
         }
     }
@@ -501,56 +635,61 @@ void CheckForBreakout()
     // Execute trade
     if(buySignal)
     {
-        ExecuteTrade(ORDER_TYPE_BUY);
+        ExecuteTrade(ORDER_TYPE_BUY, session);
     }
     else if(sellSignal)
     {
-        ExecuteTrade(ORDER_TYPE_SELL);
+        ExecuteTrade(ORDER_TYPE_SELL, session);
     }
 }
 
 //+------------------------------------------------------------------+
 //| Execute Trade                                                     |
 //+------------------------------------------------------------------+
-void ExecuteTrade(ENUM_ORDER_TYPE orderType)
+void ExecuteTrade(ENUM_ORDER_TYPE orderType, string session)
 {
-    double entryPrice, slPrice, tpPrice, slDistance;
+    double entryPrice = 0, slPrice = 0, tpPrice = 0, slDistance = 0;
 
     if(orderType == ORDER_TYPE_BUY)
     {
         entryPrice = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
 
-        // Calculate SL based on type
         switch(InpSLType)
         {
-            case SL_AGGRESSIVE:
+            case SL_ASIAN_MID:
                 slPrice = g_AsianMid;
                 break;
-            case SL_CONSERVATIVE:
-                slPrice = g_AsianLow - InpBreakoutBuffer * _Point;
+            case SL_ASIAN_OPPOSITE:
+                slPrice = g_AsianLow - InpBreakoutBuffer * g_PipValue;
                 break;
             case SL_ATR_BASED:
-                slPrice = entryPrice - GetATR() * 2;
+                slPrice = entryPrice - GetATR() * 1.5;
+                break;
+            case SL_FIXED_PIPS:
+                slPrice = entryPrice - InpFixedSLPips * g_PipValue;
                 break;
         }
 
         slDistance = entryPrice - slPrice;
         tpPrice = entryPrice + (slDistance * InpRiskReward);
     }
-    else // SELL
+    else
     {
         entryPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
 
         switch(InpSLType)
         {
-            case SL_AGGRESSIVE:
+            case SL_ASIAN_MID:
                 slPrice = g_AsianMid;
                 break;
-            case SL_CONSERVATIVE:
-                slPrice = g_AsianHigh + InpBreakoutBuffer * _Point;
+            case SL_ASIAN_OPPOSITE:
+                slPrice = g_AsianHigh + InpBreakoutBuffer * g_PipValue;
                 break;
             case SL_ATR_BASED:
-                slPrice = entryPrice + GetATR() * 2;
+                slPrice = entryPrice + GetATR() * 1.5;
+                break;
+            case SL_FIXED_PIPS:
+                slPrice = entryPrice + InpFixedSLPips * g_PipValue;
                 break;
         }
 
@@ -558,21 +697,20 @@ void ExecuteTrade(ENUM_ORDER_TYPE orderType)
         tpPrice = entryPrice - (slDistance * InpRiskReward);
     }
 
-    // Calculate lot size
     double lotSize = CalculateLotSize(slDistance);
 
     if(lotSize <= 0)
     {
-        Print("❌ Invalid lot size");
+        Print("Invalid lot size");
         return;
     }
 
-    // Normalize prices
     slPrice = NormalizeDouble(slPrice, _Digits);
     tpPrice = NormalizeDouble(tpPrice, _Digits);
     entryPrice = NormalizeDouble(entryPrice, _Digits);
 
-    string comment = StringFormat("Poutine_%s_R%.1f",
+    string comment = StringFormat("Poutine_%s_%s_R%.1f",
+                                  session,
                                   orderType == ORDER_TYPE_BUY ? "BUY" : "SELL",
                                   InpRiskReward);
 
@@ -586,20 +724,20 @@ void ExecuteTrade(ENUM_ORDER_TYPE orderType)
     if(success)
     {
         g_TradeTakenToday = true;
+        g_TradesToday++;
 
         Print("═══════════════════════════════════════");
-        Print("✅ ", orderType == ORDER_TYPE_BUY ? "BUY" : "SELL", " ORDER EXECUTED");
+        Print(orderType == ORDER_TYPE_BUY ? "BUY" : "SELL", " ORDER - ", session, " SESSION");
         Print("Entry: ", DoubleToString(entryPrice, _Digits));
-        Print("SL: ", DoubleToString(slPrice, _Digits), " (", DoubleToString(slDistance / _Point, 0), " pts)");
+        Print("SL: ", DoubleToString(slPrice, _Digits), " (", DoubleToString(slDistance / g_PipValue, 1), " pips)");
         Print("TP: ", DoubleToString(tpPrice, _Digits), " (R:", InpRiskReward, ")");
         Print("Lot: ", DoubleToString(lotSize, 2), " | Risk: ", InpRiskPercent, "%");
-        Print("Asian Range: H=", DoubleToString(g_AsianHigh, _Digits),
-              " L=", DoubleToString(g_AsianLow, _Digits));
+        Print("Market Bias: ", g_MarketBias == 1 ? "BULLISH" : g_MarketBias == -1 ? "BEARISH" : "NEUTRAL");
         Print("═══════════════════════════════════════");
     }
     else
     {
-        Print("❌ Order failed! Error: ", GetLastError(), " - ", trade.ResultComment());
+        Print("Order failed: ", GetLastError(), " - ", trade.ResultComment());
     }
 }
 
@@ -621,7 +759,6 @@ double CalculateLotSize(double slDistance)
     double slTicks = slDistance / tickSize;
     double lotSize = riskAmount / (slTicks * tickValue);
 
-    // Normalize to broker limits
     double minLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
     double maxLot = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
     double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
@@ -661,32 +798,26 @@ void ManagePosition()
 
         if(posType == POSITION_TYPE_BUY)
         {
-            // Trail SL for longs
             double potentialSL = bid - trailDistance;
-
-            // Only trail if price moved in our favor and new SL is better
             if(potentialSL > openPrice && potentialSL > currentSL)
             {
                 newSL = NormalizeDouble(potentialSL, _Digits);
             }
         }
-        else // POSITION_TYPE_SELL
+        else
         {
-            // Trail SL for shorts
             double potentialSL = ask + trailDistance;
-
             if(potentialSL < openPrice && (currentSL == 0 || potentialSL < currentSL))
             {
                 newSL = NormalizeDouble(potentialSL, _Digits);
             }
         }
 
-        // Modify if new SL is valid
         if(newSL > 0 && newSL != currentSL)
         {
             if(trade.PositionModify(ticket, newSL, currentTP))
             {
-                Print("📈 Trailing Stop moved to: ", DoubleToString(newSL, _Digits));
+                Print("Trailing Stop: ", DoubleToString(newSL, _Digits));
             }
         }
     }
@@ -707,37 +838,32 @@ void ForceCloseAllPositions(string reason)
 
         if(trade.PositionClose(ticket))
         {
-            Print("🔒 Position closed: ", reason);
+            Print("Position closed: ", reason);
         }
     }
 }
 
 //+------------------------------------------------------------------+
-//| Check FTMO Daily/Total Limits                                     |
+//| Check FTMO Limits                                                 |
 //+------------------------------------------------------------------+
 bool CheckFTMOLimits()
 {
-    double currentBalance = accInfo.Balance();
     double currentEquity = accInfo.Equity();
 
-    // Check daily loss
     double dailyLoss = g_DailyStartBalance - currentEquity;
     double dailyLossPct = (dailyLoss / g_DailyStartBalance) * 100;
 
     if(dailyLossPct >= InpMaxDailyLossPct)
     {
-        Print("⛔ FTMO Daily Loss Limit Reached: ", DoubleToString(dailyLossPct, 2), "%");
         ForceCloseAllPositions("FTMO Daily Limit");
         return false;
     }
 
-    // Check total drawdown
     double totalDD = g_InitialBalance - currentEquity;
     double totalDDPct = (totalDD / g_InitialBalance) * 100;
 
     if(totalDDPct >= InpMaxTotalDDPct)
     {
-        Print("⛔ FTMO Total Drawdown Limit Reached: ", DoubleToString(totalDDPct, 2), "%");
         ForceCloseAllPositions("FTMO Total DD Limit");
         return false;
     }
@@ -760,7 +886,6 @@ bool CheckMarginForTrade()
         return false;
     }
 
-    // Require at least 2x margin for safety
     return freeMargin >= marginRequired * 2;
 }
 
@@ -774,16 +899,13 @@ void CheckNewDay()
 
     if(g_LastTradeDate != today)
     {
-        // New day - reset variables
         g_LastTradeDate = today;
         g_DailyStartBalance = accInfo.Balance();
-
         ResetDailyVariables();
 
         Print("═══════════════════════════════════════");
-        Print("🌅 NEW TRADING DAY STARTED");
-        Print("Date: ", TimeToString(today, TIME_DATE));
-        Print("Starting Balance: $", DoubleToString(g_DailyStartBalance, 2));
+        Print("NEW TRADING DAY");
+        Print("Balance: $", DoubleToString(g_DailyStartBalance, 2));
         Print("═══════════════════════════════════════");
     }
 }
@@ -796,13 +918,13 @@ void ResetDailyVariables()
     g_AsianHigh = 0;
     g_AsianLow = 0;
     g_AsianMid = 0;
-    g_AsianRange = 0;
+    g_AsianRangePips = 0;
     g_RangeCalculated = false;
     g_TradeTakenToday = false;
+    g_TradesToday = 0;
     g_LiquiditySweepDetected = false;
     g_SweepDirection = 0;
 
-    // Clean old chart objects
     ObjectsDeleteAll(0, "Poutine_");
 }
 
@@ -825,15 +947,18 @@ double GetATR()
 //+------------------------------------------------------------------+
 int CalculateBrokerGMTOffset()
 {
+    if(MQLInfoInteger(MQL_TESTER))
+    {
+        return InpBrokerGMTOffset;
+    }
+
     datetime brokerTime = TimeCurrent();
     datetime gmtTime = TimeGMT();
 
-    // Handle weekend case
-    if(gmtTime == 0) return 0;
+    if(gmtTime == 0) return InpBrokerGMTOffset;
 
     int offset = (int)((brokerTime - gmtTime) / 3600);
 
-    // Clamp to reasonable range
     if(offset < -12) offset = -12;
     if(offset > 14) offset = 14;
 
@@ -884,36 +1009,22 @@ void DrawAsianRangeBox()
     datetime boxStart = todayStart + (InpAsianStartHour + g_BrokerGMTOffset) * 3600;
     datetime boxEnd = todayStart + (InpForceCloseHour + g_BrokerGMTOffset) * 3600;
 
-    string boxName = "Poutine_AsianBox";
     string highName = "Poutine_High";
     string lowName = "Poutine_Low";
     string midName = "Poutine_Mid";
 
-    // Draw rectangle for Asian range
-    ObjectDelete(0, boxName);
-    ObjectCreate(0, boxName, OBJ_RECTANGLE, 0, boxStart, g_AsianHigh, boxEnd, g_AsianLow);
-    ObjectSetInteger(0, boxName, OBJPROP_COLOR, InpBoxColorNeutral);
-    ObjectSetInteger(0, boxName, OBJPROP_STYLE, STYLE_DOT);
-    ObjectSetInteger(0, boxName, OBJPROP_WIDTH, 1);
-    ObjectSetInteger(0, boxName, OBJPROP_BACK, true);
-    ObjectSetInteger(0, boxName, OBJPROP_FILL, true);
-    ObjectSetInteger(0, boxName, OBJPROP_COLOR, clrDarkSlateGray);
-
-    // High line
     ObjectDelete(0, highName);
     ObjectCreate(0, highName, OBJ_HLINE, 0, 0, g_AsianHigh);
     ObjectSetInteger(0, highName, OBJPROP_COLOR, InpBoxColorBull);
     ObjectSetInteger(0, highName, OBJPROP_STYLE, STYLE_DASH);
     ObjectSetInteger(0, highName, OBJPROP_WIDTH, 2);
 
-    // Low line
     ObjectDelete(0, lowName);
     ObjectCreate(0, lowName, OBJ_HLINE, 0, 0, g_AsianLow);
     ObjectSetInteger(0, lowName, OBJPROP_COLOR, InpBoxColorBear);
     ObjectSetInteger(0, lowName, OBJPROP_STYLE, STYLE_DASH);
     ObjectSetInteger(0, lowName, OBJPROP_WIDTH, 2);
 
-    // Mid line (SL reference)
     ObjectDelete(0, midName);
     ObjectCreate(0, midName, OBJ_HLINE, 0, 0, g_AsianMid);
     ObjectSetInteger(0, midName, OBJPROP_COLOR, clrYellow);
@@ -933,40 +1044,29 @@ void UpdatePanel(string status)
     double dailyPL = equity - g_DailyStartBalance;
     double dailyPLPct = g_DailyStartBalance > 0 ? (dailyPL / g_DailyStartBalance) * 100 : 0;
 
+    string biasStr = g_MarketBias == 1 ? "BULLISH" : g_MarketBias == -1 ? "BEARISH" : "NEUTRAL";
+
     string info = "\n";
-    info += "╔═══════════════════════════════════════════╗\n";
-    info += "║       POUTINE EA v2.0 - INSTITUTIONAL     ║\n";
-    info += "║         London Breakout Strategy          ║\n";
-    info += "╠═══════════════════════════════════════════╣\n";
-    info += "║ " + status + "\n";
-    info += "╠═══════════════════════════════════════════╣\n";
-    info += "║ GMT Time: " + IntegerToString(gmtHour) + ":" +
-            (gmtMinute < 10 ? "0" : "") + IntegerToString(gmtMinute) + "\n";
-    info += "╠═══════════════════════════════════════════╣\n";
-    info += "║ ASIAN RANGE:\n";
-    info += "║   High: " + DoubleToString(g_AsianHigh, _Digits) + "\n";
-    info += "║   Low:  " + DoubleToString(g_AsianLow, _Digits) + "\n";
-    info += "║   Mid:  " + DoubleToString(g_AsianMid, _Digits) + "\n";
-    info += "║   Size: " + DoubleToString(g_AsianRange, 0) + " pts\n";
-    info += "╠═══════════════════════════════════════════╣\n";
-    info += "║ ACCOUNT:\n";
-    info += "║   Equity: $" + DoubleToString(equity, 2) + "\n";
-    info += "║   Daily P/L: " + (dailyPL >= 0 ? "+" : "") +
-            DoubleToString(dailyPL, 2) + " (" +
-            (dailyPLPct >= 0 ? "+" : "") + DoubleToString(dailyPLPct, 2) + "%)\n";
-    info += "╠═══════════════════════════════════════════╣\n";
-    info += "║ STATS:\n";
-    info += "║   Total: " + IntegerToString(g_TotalTrades) +
-            " | Win: " + IntegerToString(g_WinTrades) +
-            " | Loss: " + IntegerToString(g_LossTrades) + "\n";
-    info += "║   Win Rate: " + (g_TotalTrades > 0 ?
-            DoubleToString((double)g_WinTrades / g_TotalTrades * 100, 1) : "0") + "%\n";
-    info += "╠═══════════════════════════════════════════╣\n";
-    info += "║ Risk: " + DoubleToString(InpRiskPercent, 1) +
-            "% | R:R = 1:" + DoubleToString(InpRiskReward, 1) + "\n";
-    info += "║ Trade Today: " + (g_TradeTakenToday ? "YES ✓" : "NO") + "\n";
-    info += "║ Position: " + (HasOpenPosition() ? "OPEN 📈" : "NONE") + "\n";
-    info += "╚═══════════════════════════════════════════╝\n";
+    info += "========================================\n";
+    info += "   POUTINE EA v3.0 - EURUSD\n";
+    info += "   Institutional London Breakout\n";
+    info += "========================================\n";
+    info += " Status: " + status + "\n";
+    info += " GMT: " + IntegerToString(gmtHour) + ":" + (gmtMinute < 10 ? "0" : "") + IntegerToString(gmtMinute) + "\n";
+    info += "----------------------------------------\n";
+    info += " ASIAN RANGE:\n";
+    info += "   High: " + DoubleToString(g_AsianHigh, _Digits) + "\n";
+    info += "   Low:  " + DoubleToString(g_AsianLow, _Digits) + "\n";
+    info += "   Size: " + DoubleToString(g_AsianRangePips, 1) + " pips\n";
+    info += "----------------------------------------\n";
+    info += " MARKET BIAS: " + biasStr + "\n";
+    info += "----------------------------------------\n";
+    info += " Equity: $" + DoubleToString(equity, 2) + "\n";
+    info += " Daily P/L: " + (dailyPL >= 0 ? "+" : "") + DoubleToString(dailyPL, 2) + "\n";
+    info += "----------------------------------------\n";
+    info += " Trades: " + IntegerToString(g_TotalTrades) + " | WR: " +
+            (g_TotalTrades > 0 ? DoubleToString((double)g_WinTrades / g_TotalTrades * 100, 1) : "0") + "%\n";
+    info += "========================================\n";
 
     Comment(info);
 }
@@ -977,31 +1077,32 @@ void UpdatePanel(string status)
 void PrintInitInfo()
 {
     Print("═══════════════════════════════════════════════════");
-    Print("     POUTINE EA v2.0 - INSTITUTIONAL GRADE");
-    Print("        London Breakout | Asian Range Box");
+    Print("     POUTINE EA v3.0 - EURUSD INSTITUTIONAL");
+    Print("        London Breakout | Smart Money");
     Print("═══════════════════════════════════════════════════");
     Print("Symbol: ", Symbol());
-    Print("Timeframe: ", EnumToString(InpConfirmTF));
+    Print("Pip Value: ", DoubleToString(g_PipValue, _Digits));
     Print("Risk: ", InpRiskPercent, "% | R:R = 1:", InpRiskReward);
     Print("Magic: ", InpMagicNumber);
-    Print("Broker GMT Offset: ", g_BrokerGMTOffset, "h");
+    Print("GMT Offset: ", g_BrokerGMTOffset, "h");
     Print("═══════════════════════════════════════════════════");
-    Print("SESSION TIMES (GMT):");
-    Print("  Asian Range: ", InpAsianStartHour, ":00 - ", InpAsianEndHour, ":00");
-    Print("  London Entry: ", InpLondonStartHour, ":00 - ", InpLondonEndHour, ":00");
-    Print("  Force Close: ", InpForceCloseHour, ":00");
+    Print("SESSIONS (GMT):");
+    Print("  Asian: ", InpAsianStartHour, ":00 - ", InpAsianEndHour, ":00");
+    Print("  London: ", InpLondonStartHour, ":00 - ", InpLondonEndHour, ":00");
+    Print("  NY: ", InpNYStartHour, ":00 - ", InpNYEndHour, ":00");
     Print("═══════════════════════════════════════════════════");
     Print("FILTERS:");
-    Print("  Range: ", InpMinRangePts, " - ", InpMaxRangePts, " pts");
-    Print("  Max Spread: ", InpMaxSpread, " pts");
-    Print("  ATR Filter: ", InpUseATRFilter ? "ON" : "OFF");
-    Print("  Liquidity Sweep: ", InpUseLiquiditySweep ? "ON" : "OFF");
+    Print("  Range: ", InpMinRangePips, " - ", InpMaxRangePips, " pips");
+    Print("  Max Spread: ", InpMaxSpreadPips, " pips");
+    Print("  Higher TF Filter: ", InpUseHigherTFFilter ? "ON" : "OFF");
+    Print("  Smart Money: ", InpUseLiquiditySweep ? "ON" : "OFF");
     Print("═══════════════════════════════════════════════════");
-    Print("FTMO PROTECTION: ", InpUseFTMOProtection ? "ENABLED" : "DISABLED");
-    Print("  Max Daily Loss: ", InpMaxDailyLossPct, "%");
-    Print("  Max Total DD: ", InpMaxTotalDDPct, "%");
+    Print("INSTITUTIONAL FILTERS:");
+    Print("  Avoid Monday: ", InpAvoidMonday ? "ON" : "OFF");
+    Print("  Avoid Friday PM: ", InpAvoidFriday ? "ON" : "OFF");
+    Print("  Avoid Rollover: ", InpAvoidRollover ? "ON" : "OFF");
     Print("═══════════════════════════════════════════════════");
-    Print("✅ POUTINE EA INITIALIZED SUCCESSFULLY");
+    Print("POUTINE EURUSD EA INITIALIZED");
     Print("═══════════════════════════════════════════════════");
 }
 //+------------------------------------------------------------------+
