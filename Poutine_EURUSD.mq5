@@ -56,7 +56,7 @@ input group "══════════ TRADE SETTINGS ═══════
 input int      InpMagicNumber       = 202402;           // Magic Number
 input ENUM_SL_TYPE InpSLType        = SL_ATR_BASED;     // Stop Loss Type
 input ENUM_ENTRY_TYPE InpEntryType  = ENTRY_CANDLE_CLOSE; // Entry Type
-input ENUM_MARKET_BIAS InpMarketBias = BIAS_AUTO;       // Market Bias Filter
+input ENUM_MARKET_BIAS InpMarketBias = BIAS_BOTH;       // Market Bias Filter (BOTH = more trades)
 input double   InpFixedSLPips       = 15.0;             // Fixed SL in Pips (if SL_FIXED_PIPS)
 input bool     InpUseTrailingStop   = true;             // Use Trailing Stop
 input double   InpTrailingATRMult   = 1.5;              // Trailing Stop ATR Multiplier
@@ -76,15 +76,15 @@ input group "══════════ BREAKOUT FILTERS ══════�
 input ENUM_TIMEFRAMES InpConfirmTF  = PERIOD_M15;       // Confirmation Timeframe
 input int      InpMinRangePips      = 5;                // Min Asian Range (pips) - Reduced for more trades
 input int      InpMaxRangePips      = 100;              // Max Asian Range (pips) - Increased
-input int      InpBreakoutBuffer    = 2;                // Breakout Buffer (pips)
+input int      InpBreakoutBuffer    = 1;                // Breakout Buffer (pips) - Reduced for more trades
 input int      InpMaxSpreadPips     = 5;                // Max Spread (pips) - Increased for backtest
 
 input group "══════════ INDICATOR FILTERS ══════════"
 input bool     InpUseRSIFilter      = true;             // Use RSI Confirmation
 input int      InpRSIPeriod         = 14;               // RSI Period
-input int      InpRSILongLevel      = 50;               // RSI Level for Long (>)
-input int      InpRSIShortLevel     = 50;               // RSI Level for Short (<)
-input bool     InpUseEMAFilter      = true;             // Use EMA Trend Filter
+input int      InpRSILongLevel      = 45;               // RSI Level for Long (>) - Relaxed for more trades
+input int      InpRSIShortLevel     = 55;               // RSI Level for Short (<) - Relaxed for more trades
+input bool     InpUseEMAFilter      = false;            // Use EMA Trend Filter (OFF = more trades)
 input int      InpEMAFastPeriod     = 5;                // Fast EMA Period
 input int      InpEMASlowPeriod     = 12;               // Slow EMA Period
 input bool     InpUseATRFilter      = false;            // Use ATR Volatility Filter (OFF by default)
@@ -94,7 +94,7 @@ input double   InpMinATRPips        = 3.0;              // Min ATR (pips)
 input group "══════════ SMART MONEY FILTERS ══════════"
 input bool     InpUseLiquiditySweep = false;            // Detect Liquidity Sweeps (OFF for simplicity)
 input int      InpSweepBufferPips   = 5;                // Sweep Detection Buffer (pips)
-input bool     InpUseHigherTFFilter = true;             // Use Higher TF Trend Filter
+input bool     InpUseHigherTFFilter = false;            // Use Higher TF Trend Filter (OFF = more trades)
 input ENUM_TIMEFRAMES InpHigherTF   = PERIOD_H4;        // Higher Timeframe for Bias
 
 input group "══════════ INSTITUTIONAL FILTERS ══════════"
