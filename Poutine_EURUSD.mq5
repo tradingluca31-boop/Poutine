@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Poutine EA v4.0 - EURUSD Trend Following"
 #property link      "https://github.com/tradingluca31-boop/Poutine"
-#property version   "4.00"
+#property version   "4.10"
 #property description "=== POUTINE EA v4.0 - EURUSD TREND FOLLOWING ==="
 #property description "Institutional Grade Trend Following Strategy"
 #property description "ADX + EMA + MACD + RSI Multi-Filter System"
@@ -31,7 +31,7 @@ enum ENUM_ENTRY_MODE
 //+------------------------------------------------------------------+
 input group "══════════ RISK MANAGEMENT ══════════"
 input double   InpRiskPercent       = 1.0;              // Risk % Per Trade
-input double   InpRiskReward        = 2.0;              // Risk:Reward Ratio
+input double   InpRiskReward        = 3.0;              // Risk:Reward Ratio (3R)
 input double   InpMaxDailyLossPct   = 4.0;              // Max Daily Loss % (FTMO: 5%)
 input double   InpMaxTotalDDPct     = 8.0;              // Max Total Drawdown % (FTMO: 10%)
 input bool     InpUseFTMOProtection = false;            // Enable FTMO Protection (OFF for backtest)
@@ -40,7 +40,7 @@ input group "══════════ TRADE SETTINGS ═══════
 input int      InpMagicNumber       = 202403;           // Magic Number
 input ENUM_ENTRY_MODE InpEntryMode  = ENTRY_CONSERVATIVE; // Entry Mode (Quality vs Quantity)
 input int      InpMaxTradesPerDay   = 2;                // Max Trades Per Day
-input bool     InpUseTrailingStop   = true;             // Use Trailing Stop
+input bool     InpUseTrailingStop   = false;            // Use Trailing Stop (OFF = let TP hit)
 input double   InpTrailingATRMult   = 2.0;              // Trailing Stop ATR Multiplier
 
 input group "══════════ TIMEFRAMES ══════════"
@@ -80,8 +80,8 @@ input int      InpRSIOversold       = 30;               // RSI Oversold (no sell
 
 input group "══════════ ATR SETTINGS ══════════"
 input int      InpATRPeriod         = 14;               // ATR Period
-input double   InpSLMultiplier      = 1.5;              // SL = ATR x Multiplier
-input double   InpMinSLPips         = 10;               // Minimum SL in Pips
+input double   InpSLMultiplier      = 2.0;              // SL = ATR x Multiplier (2x standard)
+input double   InpMinSLPips         = 15;               // Minimum SL in Pips (avoid noise)
 input double   InpMaxSLPips         = 50;               // Maximum SL in Pips
 
 input group "══════════ SPREAD FILTER ══════════"
