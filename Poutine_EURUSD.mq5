@@ -31,7 +31,7 @@ enum ENUM_ENTRY_MODE
 //+------------------------------------------------------------------+
 input group "══════════ RISK MANAGEMENT ══════════"
 input double   InpRiskPercent       = 1.0;              // Risk % Per Trade
-input double   InpRiskReward        = 3.0;              // Risk:Reward Ratio (3R)
+input double   InpRiskReward        = 2.0;              // Risk:Reward Ratio (2R - more realistic)
 input double   InpMaxDailyLossPct   = 4.0;              // Max Daily Loss % (FTMO: 5%)
 input double   InpMaxTotalDDPct     = 100.0;            // Max Total Drawdown % (disabled for backtest)
 input bool     InpUseFTMOProtection = false;            // Enable FTMO Protection (OFF for backtest)
@@ -80,9 +80,13 @@ input int      InpRSIOversold       = 30;               // RSI Oversold (no sell
 
 input group "══════════ ATR SETTINGS ══════════"
 input int      InpATRPeriod         = 14;               // ATR Period
-input double   InpSLMultiplier      = 2.0;              // SL = ATR x Multiplier (2x standard)
-input double   InpMinSLPips         = 15;               // Minimum SL in Pips (avoid noise)
-input double   InpMaxSLPips         = 50;               // Maximum SL in Pips
+input double   InpSLMultiplier      = 1.5;              // SL = ATR x Multiplier (tighter)
+input double   InpMinSLPips         = 10;               // Minimum SL in Pips
+input double   InpMaxSLPips         = 25;               // Maximum SL in Pips (tighter TP)
+
+input group "══════════ BREAK-EVEN ══════════"
+input bool     InpUseBreakEven      = false;            // Move SL to entry at +1R (OFF for now)
+input double   InpBreakEvenTrigger  = 1.0;              // Trigger BE at X times risk
 
 input group "══════════ SPREAD FILTER ══════════"
 input int      InpMaxSpreadPips     = 3;                // Max Spread (pips)
@@ -621,8 +625,6 @@ double CalculateLotSize(double slDistance)
 //+------------------------------------------------------------------+
 void ManageOpenPositions()
 {
-    if(!InpUseTrailingStop) return;
-
     for(int i = PositionsTotal() - 1; i >= 0; i--)
     {
         ulong ticket = PositionGetTicket(i);
@@ -636,40 +638,71 @@ void ManageOpenPositions()
         double currentTP = PositionGetDouble(POSITION_TP);
         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
 
-        // Get ATR for trailing
-        double atr[];
-        ArraySetAsSeries(atr, true);
-        if(CopyBuffer(g_ATRHandle, 0, 0, 1, atr) <= 0) continue;
-
-        double trailDistance = atr[0] * InpTrailingATRMult;
         double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
         double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
 
+        // Calculate original risk (distance from entry to SL)
+        double riskDistance = MathAbs(openPrice - currentSL);
         double newSL = 0;
 
-        if(posType == POSITION_TYPE_BUY)
+        // === BREAK-EVEN LOGIC ===
+        if(InpUseBreakEven)
         {
-            double potentialSL = bid - trailDistance;
-            // Only trail if in profit and new SL is better
-            if(potentialSL > openPrice && potentialSL > currentSL)
+            double beDistance = riskDistance * InpBreakEvenTrigger;
+
+            if(posType == POSITION_TYPE_BUY)
             {
-                newSL = NormalizeDouble(potentialSL, _Digits);
+                // If price moved +1R in our favor, move SL to entry + small buffer
+                if(bid >= openPrice + beDistance && currentSL < openPrice)
+                {
+                    newSL = NormalizeDouble(openPrice + (2 * _Point), _Digits);
+                    Print("BREAK-EVEN activated at +", InpBreakEvenTrigger, "R");
+                }
             }
-        }
-        else
-        {
-            double potentialSL = ask + trailDistance;
-            if(potentialSL < openPrice && (currentSL == 0 || potentialSL < currentSL))
+            else // SELL
             {
-                newSL = NormalizeDouble(potentialSL, _Digits);
+                if(ask <= openPrice - beDistance && currentSL > openPrice)
+                {
+                    newSL = NormalizeDouble(openPrice - (2 * _Point), _Digits);
+                    Print("BREAK-EVEN activated at +", InpBreakEvenTrigger, "R");
+                }
             }
         }
 
+        // === TRAILING STOP (only if enabled and after BE) ===
+        if(InpUseTrailingStop && currentSL >= openPrice) // Only trail after BE
+        {
+            double atr[];
+            ArraySetAsSeries(atr, true);
+            if(CopyBuffer(g_ATRHandle, 0, 0, 1, atr) > 0)
+            {
+                double trailDistance = atr[0] * InpTrailingATRMult;
+
+                if(posType == POSITION_TYPE_BUY)
+                {
+                    double potentialSL = bid - trailDistance;
+                    if(potentialSL > currentSL)
+                    {
+                        newSL = NormalizeDouble(potentialSL, _Digits);
+                    }
+                }
+                else
+                {
+                    double potentialSL = ask + trailDistance;
+                    if(potentialSL < currentSL)
+                    {
+                        newSL = NormalizeDouble(potentialSL, _Digits);
+                    }
+                }
+            }
+        }
+
+        // Apply new SL if changed
         if(newSL > 0 && newSL != currentSL)
         {
             if(trade.PositionModify(ticket, newSL, currentTP))
             {
-                Print("Trailing Stop: ", DoubleToString(newSL, _Digits));
+                Print("SL Modified: ", DoubleToString(currentSL, _Digits), " -> ", DoubleToString(newSL, _Digits));
             }
         }
     }
