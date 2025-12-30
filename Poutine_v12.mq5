@@ -20,7 +20,7 @@
 //| INPUT PARAMETERS - OPTIMIZED FOR GBPUSD                          |
 //+------------------------------------------------------------------+
 input group "══════════ RISK MANAGEMENT ══════════"
-input double   InpRiskPercent       = 1.0;              // Risk % Per Trade
+input double   InpRiskPercent       = 0.6;              // Risk % Per Trade (0.6% FTMO safe)
 input double   InpRiskReward        = 3.0;              // Risk:Reward
 input bool     InpUseFTMOLotCalc    = true;             // FTMO Mode: Lot sur Capital Initial (pas de compounding)
 input double   InpMaxDailyLossPct   = 4.0;              // Max Daily Loss % (FTMO: 5%)
