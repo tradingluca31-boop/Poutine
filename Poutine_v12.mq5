@@ -98,7 +98,8 @@ input bool     InpUseMaxProfitProtection = true;        // Max Profit Protection
 input double   InpMaxProfitPerTrade = 300.0;            // Max Profit Per Trade ($) = +$300 (3R)
 
 input group "══════════ BROKER SETTINGS ══════════"
-input int      InpBrokerGMTOffset   = 2;                // Broker GMT Offset (for backtest)
+input bool     InpAutoDetectGMT     = true;             // Auto-Detect GMT (LIVE) - Manual en backtest
+input int      InpBrokerGMTOffset   = 2;                // Broker GMT Offset (backtest uniquement)
 
 input group "═══════════════════════════════════════════════════════════"
 input group "                    ★★★ FILTRES ★★★                           "
@@ -2116,25 +2117,43 @@ void CheckNewDay()
 
 //+------------------------------------------------------------------+
 //| Calculate Broker GMT Offset                                       |
+//| Auto-detect in LIVE mode, Manual in BACKTEST                      |
 //+------------------------------------------------------------------+
 int CalculateBrokerGMTOffset()
 {
+    // In backtest: always use manual setting
     if(MQLInfoInteger(MQL_TESTER))
     {
+        Print("BACKTEST MODE: Using manual GMT offset = ", InpBrokerGMTOffset);
         return InpBrokerGMTOffset;
     }
 
-    datetime brokerTime = TimeCurrent();
-    datetime gmtTime = TimeGMT();
+    // In live: auto-detect if enabled
+    if(InpAutoDetectGMT)
+    {
+        datetime brokerTime = TimeCurrent();
+        datetime gmtTime = TimeGMT();
 
-    if(gmtTime == 0) return InpBrokerGMTOffset;
+        if(gmtTime == 0)
+        {
+            Print("GMT AUTO-DETECT FAILED: Using manual offset = ", InpBrokerGMTOffset);
+            return InpBrokerGMTOffset;
+        }
 
-    int offset = (int)((brokerTime - gmtTime) / 3600);
+        int offset = (int)((brokerTime - gmtTime) / 3600);
 
-    if(offset < -12) offset = -12;
-    if(offset > 14) offset = 14;
+        // Sanity check
+        if(offset < -12) offset = -12;
+        if(offset > 14) offset = 14;
 
-    return offset;
+        Print("GMT AUTO-DETECTED: Broker GMT+", offset, " (Server: ", TimeToString(brokerTime), " | GMT: ", TimeToString(gmtTime), ")");
+        return offset;
+    }
+    else
+    {
+        Print("GMT MANUAL MODE: Using offset = ", InpBrokerGMTOffset);
+        return InpBrokerGMTOffset;
+    }
 }
 
 //+------------------------------------------------------------------+
